@@ -3,33 +3,27 @@ import csv
 import os
 import requests
 
-class Auth:
-    """Auth class for storing token"""
-    def __init__(self, token):
-        self.token = token
-
-    def set_token(self, token):
-        """Set token"""
-        self.token = token
-
-auth = Auth("")
-
-def get_trello_board(url):
-    """get taiga board"""
-    headers = {
-        "Authorization": "Bearer " + auth.token
+def get_trello_board(board):
+    """get trello board"""
+    req_url = "https://api.trello.com/1/boards/" + board + "/cards"
+    req_header = {
+    "Accept": "application/json"
     }
+    query = {
+    'key': os.environ['TRELLO_KEY'],
+    'token': os.environ['TRELLO_TOKEN']
+    }
+    # pylint: disable=R0801
     response = requests.request(
-        "GET",
-        url,
-        headers=headers,
-        timeout=30
+    "GET",
+    headers=req_header,
+    params=query,
+    timeout=35,
+    url=req_url
     )
-    cards = csv.DictReader(response.text.splitlines())
-    cards = [dict(card) for card in cards]
-
-    
-    return cards
+    if response.ok is False:
+        raise ValueError("Trello API error: " + response.text)
+    return response.json()
 
 def sort_cards(cards,board):
     """sort cards into unassigned, in progress, and completed"""
@@ -52,19 +46,16 @@ def sort_cards(cards,board):
     completed_cards = []
     for card in cards:
         #remove every in card but its name, and list id, idMembers, labels, due, and short link
-        card = {'name': card['subject'],
-                'status': card['status'].lower(), 
-                'participants': card['assigned_users_full_name'].split(",") if card['assigned_users_full_name'] != "" else [],
-                'labels': [{"name": tag.strip().upper()} for tag in card['tags'].split(",")] if card['tags'] is not None else [],
-                'start': card['due_date'],
-                'eventId': card['ref']}
+        card = {'name': card['name'], 'idList': card['idList'], \
+                'participants': card['idMembers'], 'labels': card['labels'], \
+                    'start': card['due'], 'eventId': card['shortLink']}
         #convert the labels to a list of string names of the labels
         card['labels'] = [label['name'] for label in card['labels']]
-        if card['status'] == "unassigned":
+        if card['idList'] == unassigned_id:
             unassigned_cards.append(card)
-        elif card['status'] == "in progress":
+        elif card['idList'] == in_progress_id:
             in_progress_cards.append(card)
-        elif card['status'] == "completed":
+        elif card['idList'] == completed_id:
             completed_cards.append(card)
     #sort the unassigned, in progress, and completed cards by due date,
     # then name. put cards with no due date at the end
@@ -81,31 +72,13 @@ def sort_cards(cards,board):
 
 def lambda_handler(event, _):
     """get the current agenda for the weekly meeting"""
-    headers = {
-        "Accept": "application/json"
-        }
-    login = requests.request(
-    "post",
-    "https://api.taiga.io/api/v1/auth",
-    headers=headers,
-    json={
-    'username': os.environ['TAIGA_USER'],
-    'password': os.environ['TAIGA_PASSWORD'],
-    'type': "normal"
-    },
-    timeout=30
-    )
-    auth.set_token(login.json()['auth_token'])
-
-
     #get the unassigned, in progress, and completed cards
     #get the beekeeping and collective boards
     print(event)
-    beekeeping_cards= get_trello_board(os.environ['TAIGA_PROJECT_BEEKEEPING_URL'])
-    collective_cards = get_trello_board(os.environ['TAIGA_PROJECT_COLLECTIVE_URL'])
+    beekeeping_cards= get_trello_board(os.environ['TRELLO_BOARD_BEEKEEPING'])
+    collective_cards = get_trello_board(os.environ['TRELLO_BOARD_COLLECTIVE'])
     #get the unassigned, in progress, and completed cards for each board
     beekeeping_cards = sort_cards(beekeeping_cards, 'BEEKEEPING')
     collective_cards = sort_cards(collective_cards, 'COLLECTIVE')
     #return the unassigned, in progress, and completed cards for each board
-    print({'BEEKEEPING': beekeeping_cards, 'COLLECTIVE': collective_cards})
     return {'BEEKEEPING': beekeeping_cards, 'COLLECTIVE': collective_cards}
