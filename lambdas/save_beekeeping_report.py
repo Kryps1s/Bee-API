@@ -2,16 +2,7 @@
 import datetime
 import os
 import requests
-class Auth:
-    """Auth class for storing token"""
-    def __init__(self, token):
-        self.token = token
 
-    def set_token(self, token):
-        """Set token"""
-        self.token = token
-
-auth = Auth("")
 def lambda_handler(event, _):
     """Lambda handler"""
     #validate event
@@ -28,23 +19,6 @@ def lambda_handler(event, _):
     #get the participants from event
     participants = event['arguments']['participants']
     #get next inspection details and validate, if any
-    headers = {
-    "Accept": "application/json"
-    }
-    query = {
-    'username': os.environ['TAIGA_USER'],
-    'password': os.environ['TAIGA_PASSWORD'],
-    'type': "normal"
-    }
-    login = requests.request(
-    "post",
-    "https://api.taiga.io/api/v1/auth",
-    headers=headers,
-    json=query,
-    timeout=30
-    )
-    auth.set_token(login.json()['auth_token'])
-
     if event['arguments']['nextInspection'] is not None:
         #validate inspection
         valid = validate_inspection(event['arguments']['nextInspection'])
@@ -60,69 +34,73 @@ def lambda_handler(event, _):
     #fetch card
     card = fetch_card(card_id)
     #add report to card
-    card['description'] = requests.utils.unquote(report)
+    card['desc'] = requests.utils.unquote(report)
     #add participants to card
-    card['assigned_users'] = participants
+    card['idMembers'] = participants
     #mark card as complete
-    card['status'] = os.environ['BEEKEEPING_LIST_COMPLETED']
+    card['dueComplete'] = True
+    #move card to Completed column
+    card['idList'] = os.environ['BEEKEEPING_LIST_COMPLETED']
     #update card
     card = update_card(card)
     #create next event
     if event['arguments']['nextInspection'] is not None:
         if event['arguments']['goal'] is not None:
-            card['description'] = event['arguments']['goal']
-        card['due_date'] = event['arguments']['nextInspection']
+            card['desc'] = event['arguments']['goal']
+        card['due'] = event['arguments']['nextInspection']
         #get the label with the hive name and add it to the card
         hive = 'UNKNOWN HIVE'
-        for label in [{"name": tag[0]} for tag in card['tags']] :
+        for label in card['labels']:
             #if label name contains hive:
-            if label.find('hive:') != -1:
-                hive = label.replace('hive:', '')
+            if label['name'].find('hive:') != -1:
+                hive = label['name'].replace('hive:', '')
                 break
         #get card name, full or partial based on inspection full, then display hive name
         if event['arguments']['full']:
             card_name = 'Full Inspection: ' + hive
         else:
             card_name = 'Partial Inspection: ' + hive
-        card['subject'] = card_name
+        card['name'] = card_name
         create_next_inspection(card)
         return {"message": "successfully saved report and created next inspection"}
     return {"message": "successfully saved report"}
 
 def fetch_card(card_id):
     """fetch card from trello"""
-    url = f"https://api.taiga.io/api/v1/userstories/by_ref?ref={card_id}&project={os.environ['TAIGA_PROJECT_BEEKEEPING']}"
+    url = "https://api.trello.com/1/cards/" + card_id
     headers = {
-    "Accept": "application/json",
-    "Authorization": "Bearer " + auth.token,
+    "Accept": "application/json"
+    }
+    query = {
+    'key': os.environ['TRELLO_KEY'],
+    'token': os.environ['TRELLO_TOKEN']
     }
     response = requests.request(
     "GET",
     url,
     headers=headers,
+    params=query,
     timeout=30
     )
     if response.ok is False:
         raise ValueError("Trello API error: " + response.text)
-    card = response.json()
-    card['desc'] = card['description'] if card['description'] is not None else ""
-    card['shortLink'] = card['ref'] if card['ref'] is not None else ""
-    card['name'] = card['subject'] if card['subject'] is not None else ""
-    card['due'] = card['due_date'] if card['due_date'] is not None else ""
-    card['labels'] = [{"name": tag[0]} for tag in card['tags']] if card['tags'] is not None else []
     return response.json()
 
 def update_card(card):
     """update card in trello"""
-    url = "https://api.taiga.io/v1/userstories/" + card['id']
+    url = "https://api.trello.com/1/cards/" + card['shortLink']
     headers = {
-    "Accept": "application/json",
-    "Authorization": "Bearer " + auth.token,
+    "Accept": "application/json"
+    }
+    query = {
+    'key': os.environ['TRELLO_KEY'],
+    'token': os.environ['TRELLO_TOKEN'],
     }
     response = requests.request(
-    "PATCH",
+    "PUT",
     url,
     headers=headers,
+    params=query,
     json=card,
     timeout=30
     )
@@ -148,6 +126,10 @@ def validate_participants(participants):
     #check if participants is empty
     if not participants:
         return "there must be at least one attendee"
+    #check if participants is an array of strings
+    for item in participants:
+        if not isinstance(item, str):
+            return "invalid participants"
     return True
 
 def validate_event(event):
@@ -195,19 +177,21 @@ def validate_inspection(inspection):
 
 def create_next_inspection(inspection):
     """create card in trello"""
-    url = "https://api.taiga.io/v1/userstories"
+    url = "https://api.trello.com/1/cards"
     headers = {
-    "Accept": "application/json",
-    "Authorization": "Bearer " + auth.token,
+    "Accept": "application/json"
     }
     query = {
-    'status': os.environ['BEEKEEPING_LIST_UNASSIGNED'],
-    'tags': inspection['tags'],
-    'due_date': inspection['due_date'],
-    'description': inspection['description'],
-    'subject': inspection['subject'],
-    'assigned_users': [],
-    'project': os.environ['TAIGA_PROJECT_BEEKEEPING'],
+    'key': os.environ['TRELLO_KEY'],
+    'token': os.environ['TRELLO_TOKEN'],
+    'idList': os.environ['BEEKEEPING_LIST_UNASSIGNED'],
+    'dueComplete': False,
+    'idLabels': inspection['idLabels'],
+    'due': inspection['due'] + 'T12:00:00.000Z',
+    'pos': 'top',
+    'desc': inspection['desc'],
+    'name': inspection['name'],
+    'idMembers': [],
     }
     response = requests.request(
     "POST",

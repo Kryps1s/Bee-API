@@ -14,40 +14,25 @@ invalid_members = ["585a7e82c8a3142c77cfb22e"]
 def fetch_members():
     """Fetch all members from the organization"""
     #pylint: disable=R0801
+    url = "https://api.trello.com/1/organizations/" + os.environ['TRELLO_ORGANIZATION'] + "/members"
     headers = {
     "Accept": "application/json"
     }
     query = {
-    'username': os.environ['TAIGA_USER'],
-    'password': os.environ['TAIGA_PASSWORD'],
-    'type': "normal"
+    'key': os.environ['TRELLO_KEY'],
+    'token': os.environ['TRELLO_TOKEN']
     }
     response = requests.request(
-    "post",
-    "https://api.taiga.io/api/v1/auth",
+    "GET",
+    url,
     headers=headers,
-    json=query,
+    params=query,
     timeout=30
     )
     if response.ok is False:
         raise TrelloAPIError("Trello API error: " + response['error'])
     #filter invalid members from list of invalid members
-    auth = response.json()['auth_token']
-    headers = {
-    "Accept": "application/json",
-    "Authorization": "Bearer " + auth
-    }
-    url = "https://api.taiga.io/api/v1/users?project=" + os.environ['TAIGA_PROJECT_MEETING']
-    response = requests.request(
-    "get",
-    url,
-    headers=headers,
-    timeout=30
-    )
-    
-    members = list(response.json())
-    members = [{ "id": member["id"], "fullName": member["full_name"],\
-                 "username": member["username"] } for member in members]
+    members = [user for user in response.json() if user['id'] not in invalid_members]
     return members
 # pylint: disable=W0613
 def lambda_handler(event, _):
@@ -66,5 +51,3 @@ def lambda_handler(event, _):
             'statusCode': 500,
             'body': json.dumps({"error": str(err)})
         }
-
-lambda_handler({}, {})
